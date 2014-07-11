@@ -153,9 +153,7 @@ class DimShuffle(Op):
                     self.drop.append(i)
                 else:
                     # we cannot drop non-broadcastable dimensions
-                    raise ValueError(
-                            "You cannot drop a non-broadcastable dimension.",
-                            (input_broadcastable, new_order))
+                    print "You cannot drop a non-broadcastable dimension."
 
         # this is the list of the original dimensions that we keep
         self.shuffle = [x for x in new_order if x != 'x']

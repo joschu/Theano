@@ -308,9 +308,10 @@ class GpuDimShuffle(GpuOp):
             if i not in new_order:
                 if not b:
                     # we cannot drop non-broadcastable dimensions
-                    raise ValueError("You cannot drop a non-broadcastable"
-                                     " dimension.",
-                                     (input_broadcastable, new_order))
+                    # raise ValueError("You cannot drop a non-broadcastable"
+                    #                  " dimension.",
+                    #                  (input_broadcastable, new_order))
+                    print "WARNING: you cannot drop a non-broadcastable dimension"
 
         self.view_map = {0: [0]}
 
