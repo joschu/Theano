@@ -647,6 +647,10 @@ class GpuCAReduceCuda(HideC, CAReduceDtype):
 
         if (x.type.ndim != len(self.reduce_mask)):
             raise TypeError("x must have rank %i" % len(self.reduce_mask))
+        if ("complex" in x.dtype or
+            "complex" in ret.outputs[0].dtype or
+            "complex" in self._acc_dtype(x.dtype)):
+            raise NotImplementedError("We don't support complex in gpu reduction")
         return Apply(self, [x], [GpuArrayType(ret.outputs[0].dtype,
                                               ret.outputs[0].type.broadcastable)()])
 
@@ -717,8 +721,12 @@ class GpuCAReduceCuda(HideC, CAReduceDtype):
 
         nd_in = node.inputs[0].type.ndim
         nd_out = node.outputs[0].type.ndim
-        in_dtype = "npy_" + node.inputs[0].dtype
-        out_dtype = "npy_" + node.outputs[0].dtype
+        # For complex, we need to use theano_complex* in the c code to
+        # have it run. But libgpuarray don't understand it.
+        in_dtype = node.inputs[0].type.dtype_specs()[1]
+        out_dtype = node.outputs[0].type.dtype_specs()[1]
+        gin_dtype = "npy_" + node.inputs[0].dtype
+        gout_dtype = "npy_" + node.outputs[0].dtype
         assert nd_in - nd_out == sum(self.reduce_mask)
 
         sio = StringIO()
@@ -782,7 +790,7 @@ class GpuCAReduceCuda(HideC, CAReduceDtype):
             if not self.reduce_mask[i]:
                 print >> sio, 'new_dims[%(j)s] = PyGpuArray_DIMS(%(x)s)[%(i)s];' % locals()
                 j += 1
-        out_typecode = dtype_to_typecode(out_dtype[4:])
+        out_typecode = dtype_to_typecode(gout_dtype[4:])
         print >> sio, """
             Py_XDECREF(%(z)s);
             %(z)s = pygpu_empty(%(nd_out)s, new_dims,
@@ -1001,7 +1009,9 @@ class GpuCAReduceCuda(HideC, CAReduceDtype):
         return sio.getvalue()
 
     def _k_init(self, node, nodename):
-        acc_dtype = "npy_" + self._acc_dtype(node.inputs[0].dtype)
+        acc_dtype = self._acc_dtype(node.inputs[0].dtype)
+        # We need to use theano_complex* and not npy_complex*
+        acc_dtype = theano.scalar.basic.Scalar(acc_dtype).dtype_specs()[1]
 
         return """
                 const int threadCount = blockDim.x * blockDim.y * blockDim.z;
@@ -1409,8 +1419,64 @@ class GpuCAReduceCuda(HideC, CAReduceDtype):
         if config.gpuarray.sync:
             sync = """GpuArray_sync(&%(z)s->ga);""" % locals()
         print >> sio, """
-        {
-            int verbose = 0;
+    {
+        int verbose = 0;
+        if(PyGpuArray_STRIDES(%(x)s)[0]>
+           PyGpuArray_STRIDES(%(x)s)[1]){
+                // If there are a lot of summations to do, then we can use simple parallelization -
+                // use each thread to do one sum.
+
+                // we might as well launch blocks of 32 threads because that's the warp size.
+                // we could schedule more threads if we were maxing out the gridsize below, but
+                // the gridsize is way more than the physical hardware and I think 32 threads
+                // on a huge grid is enough to fully use the hardware.
+                dim3 n_threads(32,1,1);
+
+                // We kindof reshape the input implicitly to something 4D:
+                //  the shape A,B,C    ->   A, B, D, E
+                //  where C <= D*E < C+32
+                //  where E==32
+
+                int A = 1;
+                int B = PyGpuArray_DIMS(%(x)s)[0];
+                int C = PyGpuArray_DIMS(%(x)s)[1];
+                int D = C/32;
+                if (32*D < C) D+= 1;
+                assert ((C <= 32*D) && (32*D < C+32));
+
+                // The gridsize would ideally be (A, D).  But we do the following logic to make
+                // sure we don't ask for a grid that is too big.
+                dim3 n_blocks(A,D);
+                if (n_blocks.x > 4096) n_blocks.x = 4096;
+                if (n_blocks.x*n_blocks.y > 4096) n_blocks.y = 4096/n_blocks.x;
+                kernel_reduce_010_AD_%(name)s<<<n_blocks, n_threads>>>(
+                A,B,C,D,
+                        (%(in_dtype)s *)(((char *)cuda_get_ptr(%(x)s->ga.data))+%(x)s->ga.offset),
+                        1,
+                        PyGpuArray_STRIDES(%(x)s)[0]/sizeof(%(in_dtype)s),
+                        PyGpuArray_STRIDES(%(x)s)[1]/sizeof(%(in_dtype)s),
+                        (%(out_dtype)s *)(((char *)cuda_get_ptr(%(z)s->ga.data))+%(z)s->ga.offset),
+                        1,
+                        PyGpuArray_STRIDES(%(z)s)[0]/sizeof(%(out_dtype)s)
+                        );
+
+            %(sync)s
+            cudaError_t sts = cudaGetLastError();
+            if (cudaSuccess != sts)
+            {
+                PyErr_Format(PyExc_RuntimeError,
+                    "Cuda error: %%s: %%s."
+                    " (grid: %%i x %%i; block: %%i x %%i x %%i)\\n",
+                    "kernel_reduce_10_AD%(name)s",
+                    cudaGetErrorString(sts),
+                    n_blocks.x,
+                    n_blocks.y,
+                    n_threads.x,
+                    n_threads.y,
+                    n_threads.z);
+                %(fail)s;
+            }
+        }else{
             dim3 n_threads(
                     std::min(PyGpuArray_DIMS(%(x)s)[0],
                             (size_t) 256));
@@ -1423,7 +1489,7 @@ class GpuCAReduceCuda(HideC, CAReduceDtype):
                 n_blocks.x,
                 n_blocks.y);
             }
-            assert( PyGpuArray_DIMS(%(x)s)[1] == PyGpuArray_DIMS(%(z)s)[0]);
+            assert(PyGpuArray_DIMS(%(x)s)[1] == PyGpuArray_DIMS(%(z)s)[0]);
             int n_shared = sizeof(%(acc_dtype)s) * n_threads.x;
             kernel_reduce_010_%(name)s<<<n_blocks, n_threads, n_shared>>>(
                     1,
@@ -1454,6 +1520,7 @@ class GpuCAReduceCuda(HideC, CAReduceDtype):
                 %(fail)s;
             }
         }
+    }
         """ % locals()
 
     def c_code_reduce_010(self, sio, node, name, x, z, fail):
@@ -1795,7 +1862,7 @@ class GpuCAReduceCuda(HideC, CAReduceDtype):
         """ % locals()
 
     def c_code_cache_version_apply(self, node):
-        version = [11]  # the version corresponding to the c code in this Op
+        version = [12]  # the version corresponding to the c code in this Op
 
         # now we insert versions for the ops on which we depend...
         scalar_node = Apply(self.scalar_op,
@@ -2032,7 +2099,7 @@ class GpuCAReduceCuda(HideC, CAReduceDtype):
 
             }
             """ % locals()
-        if self.reduce_mask == (0, 1, 0):
+        if self.reduce_mask == (0, 1, 0) or self.reduce_mask == (1, 0):
             reduce_fct = self._assign_reduce(node, nodename, "myresult",
                                              "X[a * sX0 + b * sX1 + c * sX2]",
                                              {}, True)

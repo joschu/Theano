@@ -3999,6 +3999,9 @@ class Tile(Op):
     def __hash__(self):
         return hash(Tile) ^ hash(self.ndim)
 
+    def __str__(self):
+        return self.__class__.__name__ + "{ndim=%d}" % self.ndim
+
     def make_node(self, x, reps):
         x = as_tensor_variable(x)
         reps = as_tensor_variable(reps)
@@ -4008,9 +4011,18 @@ class Tile(Op):
     def perform(self, node, inp, out_):
         x, reps = inp
         out, = out_
-        out[0] = numpy.tile(x, reps)
-        if len(out[0].shape) != self.ndim:
-            raise ValueError('Tile.perform produced incorrect shape')
+        res = numpy.tile(x, reps)
+        if res.ndim != self.ndim:
+            raise ValueError(
+                'Tile.perform produced incorrect number of dimensions')
+
+        if (numpy.asarray(reps) == 1).all():
+            # In that case, some NumPy version return a view!  As this
+            # op isn't declared as inplace, we need to check that and
+            # copy the data.
+            if numpy.may_share_memory(res, x):
+                res = res.copy()
+        out[0] = res
 
     def infer_shape(self, node, in_shapes):
         # Note: in contrast with numpy, it is assumed that x.shape and reps
@@ -4054,7 +4066,7 @@ def tile(x, reps, ndim=None):
         assert python_all([int(i) == i for i in iter(reps)])
     except (TypeError, AssertionError):
         raise ValueError("reps argument to tile must be a constant (e.g. "
-        "tuple, list of integers)")
+                         "tuple, list of integers)")
     if len(reps) != x.ndim:
         raise ValueError("len(reps) != x.ndim not currently supported")
     elif (ndim is not None) and ndim != x.ndim:
