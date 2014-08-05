@@ -17,7 +17,7 @@ from theano.gof import (local_optimizer, EquilibriumDB, SequenceDB, ProxyDB,
                         Optimizer, toolbox)
 from theano.gof.python25 import all, any
 from theano.sandbox.cuda.basic_ops import (
-    device_properties, gpu_eye,
+    device_properties, gpu_eye, gpu_contiguous,
     gpu_from_host, host_from_gpu, GpuFromHost, HostFromGpu,
     GpuElemwise, GpuDimShuffle, GpuReshape, GpuCAReduce, GpuFlatten,
     GpuSubtensor, GpuAdvancedSubtensor1,
@@ -25,7 +25,7 @@ from theano.sandbox.cuda.basic_ops import (
     GpuIncSubtensor, gpu_alloc, GpuAlloc, gpu_shape)
 from theano.sandbox.cuda.type import CudaNdarrayType
 from theano.sandbox.cuda.blas import (gpu_dot22, gpu_dot22scalar,
-        gpu_gemm_inplace, gpu_gemm_no_inplace, GpuConv)
+        gpu_gemm_inplace, gpu_gemm_no_inplace, GpuConv, GpuCorrMM)
 from theano.sandbox.cuda.blas import gpu_gemv_inplace
 from theano.sandbox.cuda.blas import gpu_gemv_no_inplace
 from theano.sandbox.cuda.blas import gpu_ger_inplace
@@ -42,7 +42,7 @@ from theano.sandbox.cuda.elemwise import erfinv_gpu
 from theano.sandbox.cuda.var import CudaNdarrayConstant
 from theano.scan_module import scan_utils, scan_op, scan_opt
 from theano.tensor.blas import _is_real_vector, _is_real_matrix
-linalg = None
+from theano.tensor import nlinalg
 
 #optdb.print_summary()  # shows what is currently registered
 
@@ -1259,6 +1259,7 @@ gpu_optimizer.register("conv_fft_full", local_conv_fft_full)
 
 import theano.tensor.signal.downsample as downsample
 
+
 @register_opt()
 @local_optimizer([downsample.DownsampleFactorMax])
 def local_gpu_downsample_factor_max(node):
@@ -1281,6 +1282,19 @@ def local_gpu_downsample_factor_max_grad(node):
                                               gpu_from_host(z),
                                               gpu_from_host(gz)))]
 
+
+@local_optimizer([GpuConv])
+def local_conv_gemm(node):
+    if (isinstance(node.op, GpuConv) and
+        node.op.border_mode in ['full', 'valid'] and
+        node.op.subsample == (1, 1)):
+        img, kern = node.inputs
+        img = gpu_contiguous(img)
+        kern = kern[:, :, ::-1, ::-1]
+        kern = gpu_contiguous(kern)
+        return [GpuCorrMM(node.op.border_mode)(img, kern)]
+
+gpu_optimizer.register("conv_gemm", local_conv_gemm)
 
 from theano.sandbox.cuda.basic_ops import gpu_join, GpuJoin
 
@@ -1643,31 +1657,26 @@ def tensor_to_cuda(x):
 
 
 @register_opt()
-@local_optimizer(None) # XXX: linalg is in sandbox, so don't import it globally
+@local_optimizer([nlinalg.ExtractDiag])
 def local_gpu_extract_diagonal(node):
     """
     extract_diagonal(host_from_gpu()) -> host_from_gpu(extract_diagonal)
     gpu_from_host(extract_diagonal) -> extract_diagonal(gpu_from_host)
     """
-    global linalg
-    if linalg is None:
-        from theano.sandbox import linalg
-        linalg = theano.sandbox.linalg
-
-    if (isinstance(node.op, linalg.ops.ExtractDiag) and
+    if (isinstance(node.op, nlinalg.ExtractDiag) and
         isinstance(node.inputs[0].type,
                    theano.tensor.TensorType)):
         inp = node.inputs[0]
         if inp.owner and isinstance(inp.owner.op, HostFromGpu):
-            return [host_from_gpu(linalg.extract_diag(gpu_from_host(inp)))]
+            return [host_from_gpu(nlinalg.extract_diag(gpu_from_host(inp)))]
     if isinstance(node.op, GpuFromHost):
         host_input = node.inputs[0]
         if (host_input.owner and
-            isinstance(host_input.owner.op, linalg.ops.ExtractDiag) and
+            isinstance(host_input.owner.op, nlinalg.ExtractDiag) and
             isinstance(host_input.owner.inputs[0].type,
                        theano.tensor.TensorType)):
             diag_node = host_input.owner
-            return [linalg.extract_diag(
+            return [nlinalg.extract_diag(
                 gpu_from_host(diag_node.inputs[0]))]
     return False
 
