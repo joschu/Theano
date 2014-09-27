@@ -500,8 +500,24 @@ class T_subtensor(unittest.TestCase, utt.TestOptimizationMixin):
              self.ignore_topo)]
         assert len(topo_) == 1
         self.assertTrue(isinstance(topo_[0].op, self.adv_sub1))
-        self.assertTrue(numpy.allclose(f([0]), ones[0] * 5))
+        f_0 = f([0])
+        self.assertTrue(f_0.shape == (1, 3))
+        self.assertTrue(numpy.allclose(f_0, ones[0] * 5))
+        f_00 = f([0, 0])
+        self.assertTrue(f_00.shape == (2, 3))
+        self.assertTrue(numpy.allclose(f_00, 5))
         self.assertRaises(IndexError, f, [0, 1])
+
+        # Test the gradient
+        c = t.sum()
+        gn = theano.grad(c, n)
+        g = self.function([idx], gn, op=self.adv_incsub1)
+        g_0 = g([0])
+        self.assertTrue(g_0.shape == (1, 3))
+        self.assertTrue(numpy.allclose(g_0, 1))
+        g_00 = g([0, 0])
+        self.assertTrue(g_00.shape == (1, 3))
+        self.assertTrue(numpy.allclose(g_00, 2))
 
     def test_adv_sub1_idx_broadcast(self):
         # The idx can be a broadcastable vector.
@@ -518,7 +534,18 @@ class T_subtensor(unittest.TestCase, utt.TestOptimizationMixin):
              self.ignore_topo)]
         assert len(topo_) == 1
         self.assertTrue(isinstance(topo_[0].op, self.adv_sub1))
-        self.assertTrue(numpy.allclose(f([0]), ones[0] * 5))
+        f_0 = f([0])
+        self.assertTrue(f_0.shape == (1, 3))
+        self.assertTrue(numpy.allclose(f_0, 5))
+
+        # Test the gradient
+        c = t.sum()
+        gn = theano.grad(c, n)
+        g = self.function([idx], gn, op=self.adv_incsub1)
+        g_0 = g([0])
+        self.assertTrue(g_0.shape == (4, 3))
+        self.assertTrue(numpy.allclose(g_0[0], 1))
+        self.assertTrue(numpy.allclose(g_0[1:], 0))
 
     @attr('slow')
     def test_shape_i_const(self):
@@ -836,7 +863,25 @@ class T_subtensor(unittest.TestCase, utt.TestOptimizationMixin):
             inc_slice(2, 1),
             (numpy.asarray([[0, 1], [2, 3], [4, 5.]]), numpy.asarray(9.),))
 
-    def test_advanced_inc_and_set(self):
+    def test_inc_and_set_subtensor(self):
+        """
+        Test increment and set with broadcast
+        """
+
+        X = tensor.matrix(dtype=self.dtype)
+        y = set_subtensor(X[1::, 1::],  0)
+        f = self.function([X], [y],
+                          op=self.inc_sub,
+                          N=1)
+
+        x_ = numpy.ones((9, 9))
+        out = f(x_.astype('float32'))
+
+        res = x_.copy()
+        res[1::, 1::] = 0
+        assert numpy.allclose(out, res)
+
+    def test_advanced1_inc_and_set(self):
         """
         Test advanced increment and set.
         """

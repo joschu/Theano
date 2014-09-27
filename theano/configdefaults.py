@@ -24,6 +24,14 @@ AddConfigVar('floatX',
              EnumStr('float64', 'float32', convert=floatX_convert,),
 )
 
+AddConfigVar('warn_float64',
+             "Do an action when a tensor variable with float64 dtype is"
+             " created. They can't be run on the GPU with the current(old)"
+             " gpu back-end and are slow with gamer GPUs.",
+             EnumStr('ignore', 'warn', 'raise', 'pdb'),
+             in_c_key=False,
+)
+
 AddConfigVar('cast_policy',
         "Rules for implicit type casting",
         EnumStr('custom', 'numpy+floatX',
@@ -411,6 +419,19 @@ AddConfigVar('warn.vm_gc_bug',
 AddConfigVar('warn.signal_conv2d_interface',
              ("Warn we use the new signal.conv2d() when its interface"
               " changed mid June 2014"),
+             BoolParam(warn_default('0.7')),
+             in_c_key=False)
+
+AddConfigVar('warn.reduce_join',
+             ('Your current code is fine, but Theano versions '
+              'prior to 0.7 (or this development version) '
+              'might have given an incorrect result. '
+              'To disable this warning, set the Theano flag '
+              'warn.reduce_join to False. The problem was an '
+              'optimization that modify the pattern '
+              '"Reduce{scalar.op}(Join(axis=0, a, b), axis=0)", '
+              'did not checked the reduction axis. So if the '
+              'reduction axis is not 0, you got wrong answer.'),
              BoolParam(warn_default('0.7')),
              in_c_key=False)
 

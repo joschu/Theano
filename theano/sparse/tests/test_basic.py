@@ -19,7 +19,7 @@ from theano.gof.python25 import all, any, product
 from theano.tensor.basic import _allclose
 
 if not enable_sparse:
-    raise SkipTest('Optional package sparse disabled')
+    raise SkipTest('Optional package SciPy not installed')
 
 from theano.sparse.basic import _is_dense, _is_sparse, _mtypes
 from theano.sparse.basic import _is_dense_variable, _is_sparse_variable
@@ -449,22 +449,6 @@ class TestConstructSparseFromList(unittest.TestCase):
         sub = m[v]
         g = theano.grad(sub.sum(), m)
         assert isinstance(g.owner.op, tensor.AdvancedIncSubtensor1)
-
-        # Test that we create a sparse grad when asked
-        # OLD INTERFACE
-        m = theano.tensor.matrix()
-        sub = m[v]
-        m.type.sparse_grad = True
-        g = theano.grad(sub.sum(), m)
-        assert isinstance(g.owner.op, ConstructSparseFromList)
-
-        # Test that we create a sparse grad when asked
-        # OLD INTERFACE CONSEQUENCE
-        m = theano.tensor.matrix()
-        sub = m[v]
-        sub.type.sparse_grad = True
-        g = theano.grad(sub.sum(), m)
-        assert isinstance(g.owner.op, ConstructSparseFromList)
 
         # Test that we create a sparse grad when asked
         # USER INTERFACE

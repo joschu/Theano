@@ -31,7 +31,8 @@ from theano.sandbox.gpuarray.nnet import (
     GpuSoftmaxWithBias, GpuSoftmax
 )
 from theano.sandbox.gpuarray.elemwise import (GpuElemwise, _is_scalar,
-                                              GpuDimShuffle, GpuCAReduceCuda)
+                                              GpuDimShuffle, GpuCAReduceCuda,
+                                              GpuCAReduceCPY)
 from theano.sandbox.gpuarray.subtensor import (GpuIncSubtensor, GpuSubtensor,
                                                GpuAdvancedIncSubtensor1,
                                                GpuAdvancedIncSubtensor1_dev20)
@@ -43,9 +44,9 @@ gpu_cut_copies = EquilibriumDB()
 gpu_seqopt = SequenceDB()
 
 gpu_seqopt.register('gpuarray_local_optimiziations', gpu_optimizer, 1,
-                    'fast_run', 'inplace', 'gpuarray')
+                    'fast_compile', 'fast_run', 'inplace', 'gpuarray')
 gpu_seqopt.register('gpuarray_cut_transfers', gpu_cut_copies, 2,
-                    'fast_run', 'gpuarray')
+                    'fast_compile', 'fast_run', 'gpuarray')
 
 # do not add 'fast_run' to these two as this would always enable gpuarray mode
 optdb.register('gpuarray_opt', gpu_seqopt,
@@ -60,7 +61,7 @@ def register_opt(*tags, **kwargs):
         return local_opt
     return f
 
-register_opt()(theano.tensor.opt.local_track_shape_i)
+register_opt('fast_compile')(theano.tensor.opt.local_track_shape_i)
 
 
 def safe_to_gpu(x):
@@ -144,19 +145,20 @@ def local_cut_gpu_host_gpu(node):
         return [node.inputs[0].owner.inputs[0]]
     return False
 gpu_cut_copies.register('cut_gpua_host_transfers', local_cut_gpu_host_gpu,
-                        'fast_run', 'inplace', 'gpuarray')
+                        'fast_compile', 'fast_run', 'inplace', 'gpuarray')
 gpu_cut_copies.register('cut_gpua_constant_transfers',
                         tensor.opt.constant_folding,
-                        'fast_run', 'gpuarray')
+                        'fast_compile', 'fast_run', 'gpuarray')
 optdb['canonicalize'].register('local_cut_gpua_host_gpua',
-                               local_cut_gpu_host_gpu, 'fast_run', 'gpuarray')
+                               local_cut_gpu_host_gpu,
+                               'fast_compile', 'fast_run', 'gpuarray')
 
 
-@register_opt()
+@register_opt('fast_compile')
 @local_optimizer([tensor.Alloc])
 def local_gpuaalloc2(node):
     """
-    Join(axis, Alloc, Alloc, ...) -> Join(axis, GpuAlloc, Alloc, ...)
+    Join(axis, {Alloc or HostFromGPU}, ...) -> Join(axis, GpuAlloc, Alloc, ...)
 
     Moves an alloc that is an input to join to the gpu.
     """
@@ -170,7 +172,7 @@ def local_gpuaalloc2(node):
         return [host_from_gpu(gpu_alloc(*node.inputs))]
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.Alloc])
 def local_gpuaalloc(node):
     new_out = gpu_alloc(*node.inputs)
@@ -198,7 +200,7 @@ def local_gpualloc_memset_0(node):
             return [new_out]
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.Reshape])
 def local_gpureshape(node):
     op = node.op
@@ -209,14 +211,14 @@ def local_gpureshape(node):
     return res
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.Rebroadcast])
 def local_gpu_rebroadcast(node):
     if isinstance(node.inputs[0].owner.op, HostFromGpu):
         return node.op(node.inputs[0].owner.inputs[0])
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.Flatten])
 def local_gpuflatten(node):
     op = node.op
@@ -229,7 +231,7 @@ def local_gpuflatten(node):
     return o
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.Elemwise])
 def local_gpu_elemwise(node):
     op = node.op
@@ -272,14 +274,14 @@ optdb.register('gpua_inplace_opt', inplace_gpu_elemwise_opt, 75,
                'inplace_elemwise_optimizer', 'fast_run', 'inplace', 'gpuarray')
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.DimShuffle])
 def local_gpua_dimshuffle(node):
     return GpuDimShuffle(node.op.input_broadcastable,
                          node.op.new_order)
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.SpecifyShape])
 def local_gpua_specifyShape(node):
     if isinstance(node.inputs[0].type, GpuArrayType):
@@ -288,11 +290,21 @@ def local_gpua_specifyShape(node):
     return tensor.specify_shape(*inp)
 
 
+@register_opt('fast_compile')
+@op_lifter([theano.compile.ops.Shape])
+def local_gpua_shape(node):
+    # op_lifter will call this opt too frequently as the output is
+    # always on the CPU.
+    if isinstance(node.inputs[0].type, GpuArrayType):
+        return
+    return [gpu_from_host(node.inputs[0]).shape]
+
+
 def gpu_print_wrapper(op, cnda):
     op.old_op.global_fn(op.old_op, numpy.asarray(cnda))
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.printing.Print])
 def local_gpu_print_op(node):
     x, = node.inputs
@@ -302,13 +314,13 @@ def local_gpu_print_op(node):
     return new_op(gpu_x)
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.Join])
 def local_gpua_join(node):
     return gpu_join
 
 
-@register_opt()
+@register_opt('fast_compile')
 @local_optimizer([GpuJoin])
 def local_gpuajoin_1(node):
     # join of a single element
@@ -317,19 +329,19 @@ def local_gpuajoin_1(node):
         return [node.inputs[1]]
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.Split])
 def local_gpua_split(node):
     return GpuSplit(node.op.len_splits)
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.Subtensor])
 def local_gpua_subtensor(node):
     return GpuSubtensor(node.op.idx_list)
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.IncSubtensor])
 def local_gpua_incsubtensor(node):
     return GpuIncSubtensor(node.op.idx_list, node.op.inplace,
@@ -337,7 +349,7 @@ def local_gpua_incsubtensor(node):
                            node.op.destroyhandler_tolerate_aliased)
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.AdvancedIncSubtensor1])
 def local_gpua_advanced_incsubtensor(node):
 
@@ -361,20 +373,30 @@ def local_gpua_advanced_incsubtensor(node):
             set_instead_of_inc=set_instead_of_inc)
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.CAReduce, tensor.Sum, tensor.elemwise.Prod])
 def local_gpua_careduce(node):
     if isinstance(node.op.scalar_op, (scalar.Add, scalar.Mul,
                                       scalar.Maximum, scalar.Minimum)):
+        dev = theano.sandbox.gpuarray.init_dev.device
+        if dev.startswith('opencl'):
+            op = GpuCAReduceCPY
+            if node.op.scalar_op not in [scalar.add, scalar.mul]:
+                # We don't support yet all reduction with cpy code.
+                return
+        else:
+            op = GpuCAReduceCuda
         x, = node.inputs
-        greduce = GpuCAReduceCuda(
+
+        greduce = op(
             node.op.scalar_op, axis=node.op.axis,
             dtype=getattr(node.op, 'dtype', None),
             acc_dtype=getattr(node.op, 'acc_dtype', None))
         gvar = greduce(x)
         # We need to have the make node called, otherwise the mask can
         # be None
-        if gvar.owner.op.supports_c_code([gpu_from_host(x)]):
+        if (op is GpuCAReduceCPY or
+            gvar.owner.op.supports_c_code([gpu_from_host(x)])):
             return greduce
         else:
             # Try to make a simpler pattern based on reshaping
@@ -407,7 +429,7 @@ def local_gpua_careduce(node):
             for idx, m in enumerate(new_mask):
                 if m == 1:
                     new_axis.append(idx)
-            greduce = GpuCAReduceCuda(
+            greduce = op(
                 node.op.scalar_op,
                 axis=new_axis, reduce_mask=new_mask,
                 dtype=getattr(node.op, 'dtype', None),
@@ -431,61 +453,67 @@ def local_gpua_careduce(node):
                 return [unreshaped_reduce]
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.blas.Gemv, tensor.blas_c.CGemv])
 def local_gpua_gemv(node):
     return GpuGemv(inplace=node.op.inplace)
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.blas.Gemm])
 def local_gpua_gemm(node):
     return GpuGemm(inplace=node.op.inplace)
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.blas.Ger, tensor.blas_c.CGer, tensor.blas_scipy.ScipyGer])
 def local_gpua_ger(node):
     return GpuGer(destructive=node.op.destructive)
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.blas.Dot22])
 def local_gpua_dot22(node):
     return gpu_dot22
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.basic.Eye])
 def local_gpua_eye(node):
     return GpuEye(dtype=node.op.dtype)
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.nnet.CrossentropySoftmaxArgmax1HotWithBias])
 def local_gpua_crossentropysoftmaxargmax1hotwithbias(node):
     return GpuCrossentropySoftmaxArgmax1HotWithBias()
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.nnet.CrossentropySoftmax1HotWithBiasDx])
 def local_gpua_crossentropysoftmax1hotwithbiasdx(node):
     return GpuCrossentropySoftmax1HotWithBiasDx()
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.nnet.Softmax])
 def local_gpua_softmax(node):
     return GpuSoftmax()
 
 
-@register_opt()
+@register_opt('fast_compile')
 @op_lifter([tensor.nnet.SoftmaxWithBias])
 def local_gpua_softmaxwithbias(node):
     return GpuSoftmaxWithBias()
 
 
-@register_opt()
+@register_opt('fast_compile')
+@op_lifter([theano.tensor.opt.Assert])
+def local_assert(node):
+    return [host_from_gpu(node.op(node.inputs[0].owner.inputs[0]))]
+
+
+@register_opt('fast_compile')
 @op_lifter([gpu_from_host, ConvOp])
 def local_gpu_conv(node):
     """
@@ -633,7 +661,7 @@ def gpu_reconstruct_graph(inputs, outputs, tag=None):
     return (nw_inputs, nw_outputs)
 
 
-@register_opt('scan')
+@register_opt('scan', 'fast_compile')
 @op_lifter([scan_op.Scan])
 def local_scan_to_gpua(node):
     info = copy.deepcopy(node.op.info)

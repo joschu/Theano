@@ -293,8 +293,8 @@ class NVCC_compiler(object):
         #nvcc argument
         preargs1 = []
         for pa in preargs:
-            for pattern in ['-O', '-arch=', '-ccbin=',
-                            '--fmad', '--ftz', '--maxrregcount',
+            for pattern in ['-O', '-arch=', '-ccbin=', '-G', '-g', '-I',
+                            '-L', '--fmad', '--ftz', '--maxrregcount',
                             '--prec-div', '--prec-sqrt',  '--use_fast_math',
                             '-fmad', '-ftz', '-maxrregcount',
                             '-prec-div', '-prec-sqrt', '-use_fast_math']:
@@ -303,7 +303,9 @@ class NVCC_compiler(object):
         preargs2 = [pa for pa in preargs
                     if pa not in preargs1]  # other arguments
 
-        cmd = [nvcc_path, '-shared', '-g'] + preargs1
+        # Don't put -G by default, as it slow things down.
+        # We aren't sure if -g slow things down, so we don't put it by default.
+        cmd = [nvcc_path, '-shared'] + preargs1
         if config.nvcc.compiler_bindir:
             cmd.extend(['--compiler-bindir', config.nvcc.compiler_bindir])
 
@@ -311,6 +313,10 @@ class NVCC_compiler(object):
             # add flags for Microsoft compiler to create .pdb files
             preargs2.extend(['/Zi', '/MD'])
             cmd.extend(['-Xlinker', '/DEBUG'])
+            # remove the complaints for the duplication of `double round(double)`
+            # in both math_functions.h and pymath.h,
+            # by not including the one in pymath.h
+            cmd.extend(['-D HAVE_ROUND'])
 
         if local_bitwidth() == 64:
             cmd.append('-m64')

@@ -10,9 +10,10 @@ http://www-users.cs.umn.edu/~saad/software/SPARSKIT/paper.ps
 import sys
 
 import numpy
-import theano
+from numpy.lib.stride_tricks import as_strided
 import scipy.sparse
 
+import theano
 from theano import gof, tensor, compile, scalar, config
 from theano.gof.python25 import all
 from theano.gradient import DisconnectedType
@@ -20,7 +21,6 @@ from theano.sparse.utils import hash_from_sparse
 import theano.tests.unittest_tools as utt
 from theano.gradient import grad_not_implemented, grad_undefined
 from theano.sparse.type import SparseType, _is_sparse
-from numpy.lib.stride_tricks import as_strided
 
 sparse_formats = ['csc', 'csr']
 
@@ -689,7 +689,7 @@ class CSM(gof.Op):
             # node.inputs[3] is of lenght as we only support sparse matrix.
             return [(node.inputs[3][0], node.inputs[3][1])]
         else:
-            return node.fgraph.shape_feature.default_infer_shape(node, shapes)
+            raise theano.tensor.basic.ShapeError("case not implemented")
 
 
 CSC = CSM('csc')
@@ -1143,11 +1143,12 @@ class GetItem2Lists(gof.op.Op):
 get_item_2lists = GetItem2Lists()
 """Select elements of sparse matrix, returning them in a vector.
 
-:param x: Sparse matrix.
-:param index: List of two lists, first list indicating the row 
-of each element and second list indicating its column.
+  :param x: Sparse matrix.
 
-:return: The corresponding elements in `x`.
+  :param index: List of two lists, first list indicating the row of
+                each element and second list indicating its column.
+
+  :return: The corresponding elements in `x`.
 """
 
 
@@ -1737,13 +1738,14 @@ class Diag(gof.op.Op):
 diag = Diag()
 """Extract the diagonal of a square sparse matrix as a dense vector.
 
-:param x: A square sparse matrix in csc format.
+  :param x: A square sparse matrix in csc format.
 
-:return: A dense vector representing the diagonal elements.
+  :return: A dense vector representing the diagonal elements.
 
-:note: The grad implemented is regular, i.e. not structured, since
-the output is a dense vector.
+.. note::
 
+  The grad implemented is regular, i.e. not structured, since the
+  output is a dense vector.
 """
 
 

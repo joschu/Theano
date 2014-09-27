@@ -31,22 +31,11 @@ class MatrixPinv(Op):
     exact and faster to compute. Also this op does not get optimized into a
     solve op.
     """
+
+    __props__ = ()
+
     def __init__(self):
         pass
-
-    def props(self):
-        """Function exposing different properties of each instance of the
-        op.
-
-        For the ``MatrixPinv`` op, there are no properties to be exposed.
-        """
-        return ()
-
-    def __hash__(self):
-        return hash((type(self), self.props()))
-
-    def __eq__(self, other):
-        return (type(self) == type(other) and self.props() == other.props())
 
     def make_node(self, x):
         x = as_tensor_variable(x)
@@ -55,9 +44,6 @@ class MatrixPinv(Op):
 
     def perform(self, node, (x,), (z, )):
         z[0] = numpy.linalg.pinv(x).astype(x.dtype)
-
-    def __str__(self):
-        return "MatrixPseudoInverse"
 
 pinv = MatrixPinv()
 
@@ -73,22 +59,10 @@ class MatrixInverse(Op):
            of ``solve``.
     """
 
+    __props__ = ()
+
     def __init__(self):
         pass
-
-    def props(self):
-        """Function exposing different properties of each instance of the
-        op.
-
-        For the ``MatrixInverse`` op, there are no properties to be exposed.
-        """
-        return ()
-
-    def __hash__(self):
-        return hash((type(self), self.props()))
-
-    def __eq__(self, other):
-        return (type(self) == type(other) and self.props() == other.props())
 
     def make_node(self, x):
         x = as_tensor_variable(x)
@@ -136,9 +110,6 @@ class MatrixInverse(Op):
         if ev is None:
             return [None]
         return [-matrix_dot(xi, ev, xi)]
-
-    def __str__(self):
-        return "MatrixInverse"
 
 matrix_inverse = MatrixInverse()
 
@@ -315,20 +286,7 @@ class Eig(Op):
 
     """
     _numop = staticmethod(numpy.linalg.eig)
-
-    def props(self):
-        """Function exposing different properties of each instance of the
-        op.
-
-        For the ``Eig`` op, there are no properties to be exposed.
-        """
-        return ()
-
-    def __hash__(self):
-        return hash((type(self), self.props()))
-
-    def __eq__(self, other):
-        return (type(self) == type(other) and self.props() == other.props())
+    __props__ = ()
 
     def make_node(self, x):
         x = as_tensor_variable(x)
@@ -344,9 +302,6 @@ class Eig(Op):
         n = shapes[0][0]
         return [(n,), (n, n)]
 
-    def __str__(self):
-        return self._numop.__name__.capitalize()
-
 eig = Eig()
 
 
@@ -356,16 +311,11 @@ class Eigh(Eig):
 
     """
     _numop = staticmethod(numpy.linalg.eigh)
+    __props__ = ('UPLO',)
 
     def __init__(self, UPLO='L'):
         assert UPLO in ['L', 'U']
         self.UPLO = UPLO
-
-    def __str__(self):
-        return 'Eigh{%s}' % self.UPLO
-
-    def props(self):
-        return self.UPLO,
 
     def make_node(self, x):
         x = as_tensor_variable(x)
@@ -427,6 +377,8 @@ class EighGrad(Op):
     """Gradient of an eigensystem of a Hermitian matrix.
 
     """
+    __props__ = ('UPLO',)
+
     def __init__(self, UPLO='L'):
         assert UPLO in ['L', 'U']
         self.UPLO = UPLO
@@ -436,18 +388,6 @@ class EighGrad(Op):
         else:
             self.tri0 = numpy.triu
             self.tri1 = lambda a: numpy.tril(a, -1)
-
-    def props(self):
-        return (self.UPLO,)
-
-    def __hash__(self):
-        return hash((type(self), self.props()))
-
-    def __eq__(self, other):
-        return (type(self) == type(other) and self.props() == other.props())
-
-    def __str__(self):
-        return 'EighGrad{%s}' % self.UPLO
 
     def make_node(self, x, w, v, gw, gv):
         x, w, v, gw, gv = map(as_tensor_variable, (x, w, v, gw, gv))
@@ -507,15 +447,10 @@ class QRFull(Op):
     and r is upper-triangular.
     """
     _numop = staticmethod(numpy.linalg.qr)
+    __props__ = ('mode',)
 
     def __init__(self, mode):
         self.mode = mode
-
-    def __hash__(self):
-        return hash((type(self), self.props()))
-
-    def __eq__(self, other):
-        return (type(self) == type(other) and self.props() == other.props())
 
     def make_node(self, x):
         x = as_tensor_variable(x)
@@ -524,17 +459,11 @@ class QRFull(Op):
         r = theano.tensor.matrix(dtype=x.dtype)
         return Apply(self, [x], [q, r])
 
-    def props(self):
-        return self.mode
-
     def perform(self, node, (x,), (q, r)):
         assert x.ndim == 2, "The input of qr function should be a matrix."
 
         q[0], r[0] = self._numop(x,
                                  self.mode)
-
-    def __str__(self):
-        return self._numop.__class__.__name__
 
 
 class QRIncomplete(Op):
@@ -544,18 +473,10 @@ class QRIncomplete(Op):
     Factor the matrix a as qr and return a single matrix.
     """
     _numop = staticmethod(numpy.linalg.qr)
+    __props__ = ('mode',)
 
     def __init__(self, mode):
         self.mode = mode
-
-    def __hash__(self):
-        return hash((type(self), self.props()))
-
-    def __eq__(self, other):
-        return (type(self) == type(other) and self.props() == other.props())
-
-    def props(self):
-        return self.mode
 
     def make_node(self, x):
         x = as_tensor_variable(x)
@@ -568,9 +489,6 @@ class QRIncomplete(Op):
         q[0] = self._numop(x,
                            self.mode)
 
-    def __str__(self):
-        return self._numop.__class__.__name__
-
 
 def qr(a, mode="full"):
     """
@@ -578,20 +496,35 @@ def qr(a, mode="full"):
     Factor the matrix a as qr, where q
     is orthonormal and r is upper-triangular.
 
-    Parameters :
-    ------------
-
-    a : array_like, shape (M, N)
+    :type a:
+        array_like, shape (M, N)
+    :param a:
         Matrix to be factored.
 
-    mode : {'reduced', 'complete', 'r', 'raw', 'full', 'economic'}, optional
+    :type mode:
+        one of 'reduced', 'complete', 'r', 'raw', 'full' and
+        'economic', optional
+    :keyword mode:
         If K = min(M, N), then
-        'reduced' : returns q, r with dimensions (M, K), (K, N) (default)
-        'complete' : returns q, r with dimensions (M, M), (M, N)
-        'r' : returns r only with dimensions (K, N)
-        'raw' : returns h, tau with dimensions (N, M), (K,)
-        'full' : alias of 'reduced', deprecated
-        'economic' : returns h from 'raw', deprecated. The options 'reduced',
+
+        'reduced'
+          returns q, r with dimensions (M, K), (K, N)
+
+        'complete'
+           returns q, r with dimensions (M, M), (M, N)
+
+        'r'
+          returns r only with dimensions (K, N)
+
+        'raw'
+          returns h, tau with dimensions (N, M), (K,)
+
+        'full'
+          alias of 'reduced', deprecated (default)
+
+        'economic'
+          returns h from 'raw', deprecated. The options 'reduced',
+
         'complete', and 'raw' are new in numpy 1.8, see the notes for more
         information. The default is 'reduced' and to maintain backward
         compatibility with earlier versions of numpy both it and the old
@@ -600,21 +533,25 @@ def qr(a, mode="full"):
         deprecated. The modes 'full' and 'economic' may be passed using only
         the first letter for backwards compatibility, but all others
         must be spelled out.
+
         Default mode is 'full' which is also default for numpy 1.6.1.
 
-        Note:   Default mode was left to full as full and reduced are both doing
-                the same thing in the new numpy version but only full works on the old
-                previous numpy version.
-    Returns :
-    ---------
-    q : matrix of float or complex, optional
-    A matrix with orthonormal columns. When mode = 'complete'
-    the result is an orthogonal/unitary matrix depending on whether
-    or not a is real/complex. The determinant may be either +/- 1 in that case.
+        :note: Default mode was left to full as full and reduced are
+           both doing the same thing in the new numpy version but only
+           full works on the old previous numpy version.
 
-    r : matrix of float or complex, optional
-    The upper-triangular matrix.
+    :rtype q:
+      matrix of float or complex, optional
+    :return q:
+      A matrix with orthonormal columns. When mode = 'complete' the
+      result is an orthogonal/unitary matrix depending on whether or
+      not a is real/complex. The determinant may be either +/- 1 in
+      that case.
 
+    :rtype r:
+      matrix of float or complex, optional
+    :return r:
+      The upper-triangular matrix.
     """
     x = [[2, 1], [3, 4]]
     if isinstance(numpy.linalg.qr(x,mode), tuple):
@@ -627,11 +564,10 @@ class SVD(Op):
 
     # See doc in the docstring of the function just after this class.
     _numop = staticmethod(numpy.linalg.svd)
+    __props__ = ('full_matrices', 'compute_uv')
 
     def __init__(self, full_matrices=True, compute_uv=True):
         """
-        inputs :
-        --------
         full_matrices : bool, optional
             If True (default), u and v have the shapes (M, M) and (N, N),
             respectively.
@@ -643,15 +579,6 @@ class SVD(Op):
         """
         self.full_matrices = full_matrices
         self.compute_uv = compute_uv
-
-    def __hash__(self):
-        return hash((type(self), self.props()))
-
-    def __eq__(self, other):
-        return (type(self) == type(other) and self.props() == other.props())
-
-    def props(self):
-        return self.full_matrices, self.compute_uv,
 
     def make_node(self, x):
         x = as_tensor_variable(x)
@@ -667,29 +594,23 @@ class SVD(Op):
                                        self.full_matrices,
                                        self.compute_uv)
 
-    def __str__(self):
-        return self._numop.__name__.capitalize()
-
 
 def svd(a, full_matrices=1, compute_uv=1):
     """
     This function performs the SVD on CPU.
 
-    Parameters :
-    ------------
-
-    full_matrices : bool, optional
+    :type full_matrices: bool, optional
+    :param full_matrices:
         If True (default), u and v have the shapes (M, M) and (N, N),
         respectively.
         Otherwise, the shapes are (M, K) and (K, N), respectively,
         where K = min(M, N).
-    compute_uv : bool, optional
+    :type compute_uv: bool, optional
+    :param compute_uv:
         Whether or not to compute u and v in addition to s.
         True by default.
 
-    Returns :
-    -------
-    U, V and D matrices.
+    :returns: U, V and D matrices.
     """
     return SVD(full_matrices, compute_uv)(a)
 

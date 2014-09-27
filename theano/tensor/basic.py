@@ -145,13 +145,13 @@ def as_tensor_variable(x, name=None, ndim=None):
         return x._as_TensorVariable()  # TODO: pass name and ndim arguments
 
     if isinstance(x, gof.Apply):
-        # TODO: use Apply's default output mechanism
-        if len(x.outputs) != 1:
+        # use Apply's default output mechanism
+        if (x.op.default_output is None) and (len(x.outputs) != 1):
             raise ValueError(
                 "It is ambiguous which output of a multi-output Op has"
                 " to be fetched.", x)
-        else:
-            x = x.outputs[0]
+
+        x = x.default_output()
     if isinstance(x, Variable):
         if isinstance(x.type, scal.Scalar):
             x = tensor_from_scalar(x)
@@ -164,10 +164,15 @@ def as_tensor_variable(x, name=None, ndim=None):
             return x
         else:
             if (x.type.ndim > ndim):
-                # TODO: strip off leading broadcastable dimensions
-                raise ValueError(
-                    'TensorType could not be cast to have %i dimensions' %
-                    ndim, x.type)
+                # strip off leading broadcastable dimensions
+                first_non_broadcastable = [idx for idx in range(x.ndim)
+                                           if x.broadcastable[idx] == False][0]
+                x = x.dimshuffle(range(x.ndim)[first_non_broadcastable:])
+                if x.ndim > ndim:
+                    raise ValueError(
+                        'TensorType could not be cast to have %i dimensions' % ndim, x.type
+                    )
+                return x
             elif (x.type.ndim < ndim):
                 return shape_padleft(x, n_ones=(ndim - x.type.ndim))
             else:
@@ -527,12 +532,13 @@ def numpy_scalar(data):
             'v.data is non-numeric, non-scalar, or has more than one'
             ' unique value', data)
 
+
 get_scalar_constant_value_elemwises = (
     scal.Cast, scal.Switch,
     scal.NEQ, scal.EQ,
     scal.LT, scal.GT, scal.LE, scal.GE,
     scal.Sub, scal.Add, scal.Mod, scal.Mul,
-    scal.IntDiv, scal.TrueDiv)
+    scal.IntDiv, scal.TrueDiv, scal.Minimum, scal.Maximum)
 def get_scalar_constant_value(orig_v, elemwise=True):
     """return the constant scalar(0-D) value underlying variable `v`
 
@@ -677,6 +683,14 @@ def get_scalar_constant_value(orig_v, elemwise=True):
                     grandparent = leftmost_parent.owner.inputs[0]
                     gp_broadcastable = grandparent.type.broadcastable
                     ndim = grandparent.type.ndim
+                    if grandparent.owner and isinstance(grandparent.owner.op,
+                                                        Rebroadcast):
+                        l = []
+                        for idx, (b1, b2) in enumerate(
+                                zip(grandparent.owner.inputs[0].broadcastable,
+                                    gp_broadcastable)):
+                            l.append(b1 or b2)
+                        gp_broadcastable = tuple(l)
 
                     assert ndim == len(gp_broadcastable)
 

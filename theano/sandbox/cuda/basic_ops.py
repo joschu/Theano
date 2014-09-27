@@ -2440,7 +2440,10 @@ class GpuAdvancedSubtensor1(tensor.AdvancedSubtensor1, GpuOp):
         if x_.type.ndim == 0:
             raise TypeError('cannot index into a scalar')
 
-        return Apply(self, [x_, ilist_], [x_.type()])
+        bcast = (ilist_.broadcastable[0],) + x_.broadcastable[1:]
+        return Apply(self, [x_, ilist_],
+                     [CudaNdarrayType(dtype=x.dtype,
+                                      broadcastable=bcast)()])
 
     def perform(self, node, inp, out_):
         # This don't work as CudaNdarray_Subscript() don't support it.
@@ -2510,15 +2513,15 @@ class GpuAdvancedIncSubtensor1(tensor.AdvancedIncSubtensor1, GpuOp):
 
         if ilist_.type.dtype[:3] not in ('int', 'uin'):
             raise TypeError('index must be integers')
-        if ilist_.type.broadcastable != (False,):
+        if ilist_.type.ndim != 1:
             raise TypeError('index must be vector')
         if x_.type.ndim == 0:
             raise TypeError('cannot index into a scalar')
-        if x_.type.broadcastable[0]:
-            # the caller should have made a copy of x len(ilist) times
-            raise TypeError('cannot index into a broadcastable dimension')
 
-        return Apply(self, [x_, y_, ilist_], [x_.type()])
+        bcast = (ilist_.broadcastable[0],) + x_.broadcastable[1:]
+        return Apply(self, [x_, y_, ilist_],
+                     [CudaNdarrayType(dtype=x_.dtype,
+                                      broadcastable=bcast)()])
 
     # CudaNdarray_Subscript() doesn't support Advanced slicing.
     # But we can't use the parent version that loops on each index
@@ -2679,15 +2682,15 @@ class GpuAdvancedIncSubtensor1_dev20(GpuAdvancedIncSubtensor1):
 
         if ilist_.type.dtype[:3] not in ('int', 'uin'):
             raise TypeError('index must be integers')
-        if ilist_.type.broadcastable != (False,):
+        if ilist_.type.ndim != 1:
             raise TypeError('index must be vector')
         if x_.type.ndim == 0:
             raise TypeError('cannot index into a scalar')
-        if x_.type.broadcastable[0]:
-            # the caller should have made a copy of x len(ilist) times
-            raise TypeError('cannot index into a broadcastable dimension')
 
-        return Apply(self, [x_, y_, ilist_], [x_.type()])
+        bcast = (ilist_.broadcastable[0],) + x_.broadcastable[1:]
+        return Apply(self, [x_, y_, ilist_],
+                     [CudaNdarrayType(dtype=x_.dtype,
+                                      broadcastable=bcast)()])
 
     def c_code_cache_version(self):
         return (2,)
@@ -2886,7 +2889,9 @@ class GpuIncSubtensor(tensor.IncSubtensor, GpuOp):
             returns a C code expression to copy source into view, and
             return 0 on success
         """
-        return """CudaNdarray_CopyFromCudaNdarray(%(view)s, %(source)s)""" % locals()
+        # On the CPU it unbroadcast based on the run time shapes. We
+        # need the same behavior on the GPU.
+        return """CudaNdarray_CopyFromCudaNdarray(%(view)s, %(source)s, 1)""" % locals()
 
     def add_to_zview(self, name, x, fail):
 
@@ -2908,7 +2913,7 @@ class GpuIncSubtensor(tensor.IncSubtensor, GpuOp):
     def c_code_cache_version(self):
         parent_version = super(GpuIncSubtensor, self).c_code_cache_version()
         if parent_version:
-            return parent_version + (0,)
+            return parent_version + (1,)
         return ()
 
 
@@ -3340,6 +3345,13 @@ class GpuContiguous(GpuOp):
     def make_node(self, input):
         input = as_cuda_ndarray_variable(input)
         return Apply(self, [input], [input.type()])
+
+    def perform(self, node, inp, out):
+        i = inp[0]
+        if not i.is_c_contiguous():
+            i = i.copy()
+        assert i.is_c_contiguous()
+        out[0][0] = i
 
     def c_code(self, node, name, inp, out, sub):
         input, = inp

@@ -1,6 +1,8 @@
 #ifndef _CUDA_NDARRAY_H
 #define _CUDA_NDARRAY_H
 
+#include <algorithm>
+
 // Defines for Python 2/3 compatibility.
 #if PY_MAJOR_VERSION >= 3
 // Py3k treats all ints as longs. This one is not caught by npy_3kcompat.h.
@@ -82,7 +84,7 @@ typedef float real;
 #define NO_VERBOSE_DEVICE_MALLOC 0
 
 /* Use this handle to make cublas calls */
-extern cublasHandle_t handle;
+extern DllExport cublasHandle_t handle;
 
 /**
  * Allocation and freeing of device memory should go through these functions so that the lib can track memory usage.
@@ -436,6 +438,7 @@ static int CudaNdarray_alloc_contiguous(CudaNdarray *self, const int nd,
 
 /*
  * Return a CudaNdarray whose 'nd' dimensions are set to dims, and allocated.
+ * Set the python error.
  */
 template<typename inttype> 
 static PyObject *CudaNdarray_NewDims(int nd, const inttype * dims)
@@ -448,6 +451,9 @@ static PyObject *CudaNdarray_NewDims(int nd, const inttype * dims)
             Py_DECREF(rval);
             return NULL;
         }
+    }else{
+        PyErr_SetString(PyExc_MemoryError,
+                        "Failed to allocate the CudaNdarray structure.");
     }
     return (PyObject*)rval;
 }

@@ -314,14 +314,10 @@ class Shape_i(gof.Op):
 
     check_input = False
 
+    __props__ = ("i",)
+
     def __init__(self, i):
         self.i = i
-
-    def __hash__(self):
-        return hash(type(self)) ^ self.i
-
-    def __eq__(self, other):
-        return type(self) == type(other) and self.i == other.i
 
     def __str__(self):
         return '%s{%i}' % (self.__class__.__name__, self.i)
@@ -402,6 +398,12 @@ def register_shape_i_c_code(typ, code, check_input, version=()):
 # Scan can deal with.
 expandable_types = ()
 
+def load_back(mod, name):
+    __import__(mod)
+    import sys
+    module = sys.modules[mod]
+    obj = getattr(module, name)
+    return obj
 
 class FromFunctionOp(gof.Op):
     """
@@ -446,6 +448,20 @@ class FromFunctionOp(gof.Op):
         assert len(outs) == len(outputs)
         for i in range(len(outs)):
             outputs[i][0] = outs[i]
+
+    def __reduce__(self):
+        mod = self.__fn.__module__
+        name = self.__fn.__name__
+        try:
+            obj = load_back(mod, name)
+        except (ImportError, KeyError, AttributeError):
+            raise PicklingError("Can't pickle as_op(), not found as %s.%s" %
+                                (mod, name))
+        else:
+            if obj is not self:
+                raise PicklingError("Can't pickle as_op(), not the object "
+                                    "at %s.%s" % (mod, name))
+        return load_back, (mod, name)
 
     def _infer_shape(self, node, input_shapes):
         return self.__infer_shape(node, input_shapes)

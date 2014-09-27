@@ -380,23 +380,29 @@ class _metadict:
             self.l.append((item, value))
 
     def __delitem__(self, item):
-        if item in self.d:
-            del self.d[item]
-        else:
-            for i, (key, val) in enumerate(self.l):
-                if key == item:
-                    del self.l[i]
-                    return
+        try:
+            if item in self.d:
+                del self.d[item]
+                return
+        except TypeError, e:
+            assert "unhashable type" in str(e)
+        for i, (key, val) in enumerate(self.l):
+            if key == item:
+                del self.l[i]
+                return
             raise KeyError(item)
 
     def discard(self, item):
-        if item in self.d:
-            del self.d[item]
-        else:
-            for i, (key, val) in enumerate(self.l):
-                if key == item:
-                    del self.l[i]
-                    return
+        try:
+            if item in self.d:
+                del self.d[item]
+                return
+        except TypeError, e:
+            assert "unhashable type" in str(e)
+        for i, (key, val) in enumerate(self.l):
+            if key == item:
+                del self.l[i]
+                return
 
     def get(self, item, default):
         try:
@@ -708,18 +714,6 @@ def is_same_graph_with_merge(var1, var2, givens=None):
         return o1 is o2
 
 
-def MergeOptMerge(opt):
-    """WRITEME
-    Returns an Optimizer that merges the graph then applies the
-    optimizer in opt and then merges the graph again in case the
-    opt introduced additional similarities.
-    """
-    merger = merge_optimizer
-    opt = SeqOptimizer([merger, opt, merger])
-    opt.name = "MergeOptMerge"
-    return opt
-
-
 def pre_constant_merge(vars):
     """
     Merge constants in the subgraph used to compute nodes in `vars`.
@@ -748,9 +742,14 @@ def pre_constant_merge(vars):
         seen_var.add(var)
         if isinstance(var, graph.Constant):
             sig = var.signature()
-            if sig in const_sig_inv:
-                return const_sig_inv[sig]
-            const_sig_inv[sig] = var
+            try:
+                if sig in const_sig_inv:
+                    return const_sig_inv[sig]
+                const_sig_inv[sig] = var
+            except TypeError:  # unhashable type
+                # Some python object like slice aren't hashable. So
+                # don't merge them here.
+                pass
             return var
         if var.owner:
             for idx, inp in enumerate(var.owner.inputs):
@@ -1849,8 +1848,7 @@ class EquilibriumOptimizer(NavigatorOptimizer):
                     process_count[process] += count
                 else:
                     process_count[process] = count
-        for i in range(len(loop_process_count), len(prof2[2])):
-            loop_process_count.append(list(prof2[2]))
+        loop_process_count.extend(prof2[2][len(loop_process_count):])
 
         max_nb_nodes = max(prof1[3], prof2[3])
 
