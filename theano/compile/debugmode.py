@@ -97,7 +97,6 @@ AddConfigVar('DebugMode.check_preallocated_output_ndim',
 
 import logging
 _logger = logging.getLogger("theano.compile.debugmode")
-_logger.setLevel(logging.WARNING)
 
 
 # Filter to avoid duplicating optimization warnings
@@ -495,7 +494,8 @@ def char_from_number(number):
 def debugprint(r, prefix='', depth=-1, done=None, print_type=False,
                file=sys.stdout, print_destroy_map=False,
                print_view_map=False, order=None, ids='CHAR',
-               stop_on_name=False, prefix_child=None):
+               stop_on_name=False, prefix_child=None,
+               scan_ops=None):
     """Print the graph leading to `r` to given depth.
 
     :param r: Variable instance
@@ -503,10 +503,10 @@ def debugprint(r, prefix='', depth=-1, done=None, print_type=False,
     :param depth: maximum recursion depth (Default -1 for unlimited).
     :param done: dict of Apply instances that have already been printed
                  and their associated printed ids
-    :param print_type: wether to print the Variable type after the other infos
+    :param print_type: whether to print the Variable type after the other infos
     :param file: file-like object to which to print
-    :param print_destroy_map: wether to print the op destroy_map after ofther info
-    :param print_view_map: wether to print the op view_map after ofther info
+    :param print_destroy_map: whether to print the op destroy_map after other info
+    :param print_view_map: whether to print the op view_map after other info
     :param order: If not empty will print the index in the toposort.
     :param ids: How do we print the identifier of the variable
                 id - print the python id value
@@ -515,6 +515,8 @@ def debugprint(r, prefix='', depth=-1, done=None, print_type=False,
                 "" - don't print an identifier
     :param stop_on_name: When True, if a node in the graph has a name,
                          we don't print anything below it.
+    :param scan_ops: Scan ops in the graph will be added inside this list
+                     for later printing purposes.
 
     """
     if depth == 0:
@@ -525,6 +527,9 @@ def debugprint(r, prefix='', depth=-1, done=None, print_type=False,
 
     if done is None:
         done = dict()
+
+    if scan_ops is None:
+        scan_ops = []
 
     if print_type:
         type_str = ' <%s>' % r.type
@@ -576,37 +581,45 @@ def debugprint(r, prefix='', depth=-1, done=None, print_type=False,
         o = ''
         if order:
             o = str(order.index(r.owner))
+
         already_printed = a in done  # get_id_str put it in the dict
         id_str = get_id_str(a)
 
         if len(a.outputs) == 1:
             print >> file, '%s%s %s%s \'%s\' %s %s %s' % (prefix, a.op,
-                                                             id_str,
-                                                             type_str, r_name,
+                                                          id_str,
+                                                          type_str,
+                                                          r_name,
+                                                          destroy_map_str,
+                                                          view_map_str,
+                                                          o)
+        else:
+            print >> file, '%s%s.%i %s%s \'%s\' %s %s %s' % (prefix, a.op,
+                                                             a.outputs.index(r),
+                                                             id_str, type_str,
+                                                             r_name,
                                                              destroy_map_str,
                                                              view_map_str,
                                                              o)
-        else:
-            print >> file, '%s%s.%i %s%s \'%s\' %s %s %s' % (prefix, a.op,
-                                                            a.outputs.index(r),
-                                                            id_str, type_str,
-                                                            r_name,
-                                                            destroy_map_str,
-                                                            view_map_str,
-                                                            o)
         if not already_printed:
             if (not stop_on_name or
                 not (hasattr(r, 'name') and r.name is not None)):
                 new_prefix = prefix_child + ' |'
                 new_prefix_child = prefix_child + ' |'
+
                 for idx, i in enumerate(a.inputs):
                     if idx == len(a.inputs) - 1:
                         new_prefix_child = prefix_child + '  '
 
+                    if hasattr(i, 'owner') and hasattr(i.owner, 'op'):
+                        if isinstance(i.owner.op, theano.scan_module.scan_op.Scan):
+                            scan_ops.append(i)
+
                     debugprint(i, new_prefix, depth=depth - 1, done=done,
                                print_type=print_type, file=file, order=order,
                                ids=ids, stop_on_name=stop_on_name,
-                               prefix_child=new_prefix_child)
+                               prefix_child=new_prefix_child, scan_ops=scan_ops)
+
     else:
         #this is an input variable
         id_str = get_id_str(r)
@@ -625,7 +638,6 @@ def _optcheck_fgraph(input_specs, output_specs, accept_inplace=False):
     :type accept_inplace: Bool
     :rtype: `FunctionGraph`
     :returns: a new FunctionGraph with a cloned graph, with debugging `Feature` instances already installed.
-
     """
     orig_inputs = [spec.variable for spec in input_specs]
     updates = [spec.update for spec in input_specs if spec.update]
@@ -667,14 +679,26 @@ def _optcheck_fgraph(input_specs, output_specs, accept_inplace=False):
     return fgraph, map(SymbolicOutput, updates), equivalence_tracker
 
 
+class DataDestroyed():
+    # this is a singleton class We put it in the storage_map when the
+    # variable value was destroyed to prevent reusing bad value for
+    # it.
+    pass
+
+data_destroyed = DataDestroyed()
+
+
 def _check_inputs(node, storage_map, r_vals, dr_vals, active_nodes,
                   clobber_dr_vals=True,
                   perform=None, warn_input_not_reused=True):
-    """
-    Raise BadDestroyMap if necessary, update dr_vals
+    """Raise BadDestroyMap if necessary, update dr_vals
 
     Returns a list of output variables that actually worked inplace
     (their value is aliased to the value of at least one input).
+
+    It modify the storage_map to remove node.inputs variable that have
+    been destroyed.
+
     """
     destroyed_idx_list = []
     destroy_map = getattr(node.op, 'destroy_map', {})
@@ -737,7 +761,8 @@ def _check_inputs(node, storage_map, r_vals, dr_vals, active_nodes,
                         raise Exception('failure in topological ordering')
                     if clobber_dr_vals:
                         dr_vals[r] = (storage_map[r][0], node) #no copy, this is the last use of this variable
-                    storage_map[r][0] = None #make sure that dr_vals[r] doens't get used again
+                    # make sure that dr_vals[r] doens't get used again
+                    storage_map[r][0] = data_destroyed
             else:
                 raise BadDestroyMap(node, r_idx, r_vals[r],
                                     storage_map[r][0], perform)
@@ -757,7 +782,6 @@ def _check_viewmap(node, storage_map):
 
         good_alias, bad_alias = {}, {}
         outstorage = storage_map[onode][0]
-        instorage_id = [id(storage_map[i][0]) for i in node.inputs]
 
         # first find out which input it aliases
         view_map = getattr(node.op, 'view_map', {})
@@ -768,8 +792,15 @@ def _check_viewmap(node, storage_map):
         # case...
 
         for ii, inode in enumerate(node.inputs):
+            in_storage = storage_map[inode][0]
+            if in_storage is data_destroyed:
+                # If the input have been destroyed, it can't be a
+                # view. So no need to check. Also, we don't have the
+                # original value, we we wouldn't be able to do this
+                # useless check.
+                continue
             if hasattr(inode.type, 'may_share_memory') and\
-               inode.type.may_share_memory(outstorage, storage_map[inode][0]):
+               inode.type.may_share_memory(outstorage, in_storage):
 
                 nodeid = id(inode)
                 bad_alias[nodeid] = ii
@@ -869,8 +900,6 @@ def _find_bad_optimizations0(order, reasons, r_vals):
     for i, node in enumerate(order):
         for new_r in node.outputs:
             for reason, r, old_graph_str, new_graph_str in reasons[new_r]:
-                problem = False
-
                 #check if the value for new_r doesn't match the value for r
                 new_r_val = r_vals[new_r]
                 r_val = r_vals[r]
@@ -1553,7 +1582,6 @@ class _Linker(gof.link.LocalLinker):
             # don't do this ugly hacky way of setting the
             # filter_checks_isfinite
             from theano.tensor import TensorType  # to set filter_check_isfinite
-            from theano import tests  # for config.unittests.rseed
         fgraph = self.fgraph
         input_storage_ = input_storage
         output_storage_ = output_storage
@@ -1707,8 +1735,6 @@ class _Linker(gof.link.LocalLinker):
                                          if r.owner is None]
 
             try:
-                equiv_vals = {}
-                problematic = set()
                 # r_vals are the true values associated with each
                 # variable in the graph they should not change during
                 # the evaluation of this function, even when the graph
@@ -2139,7 +2165,7 @@ class _Maker(FunctionMaker):  # inheritance buys a few helper functions
         # Check if some input variables are unused
         self._check_unused_inputs(inputs, outputs, on_unused_input)
 
-        # Make a list of (SymbolicInput|SymblicInputKits, indices, [SymbolicInput,...]), one 
+        # Make a list of (SymbolicInput|SymblicInputKits, indices, [SymbolicInput,...]), one
         # tuple for each input. (See Function.indices for more details)
         indices = [[input] + self.expand_in(input, _inputs) for input in inputs]
 
@@ -2266,7 +2292,6 @@ class _Maker(FunctionMaker):  # inheritance buys a few helper functions
                                     "default for a SymbolicInputKit.")
                 input_storage.append(default.storage)
                 default = None
-                required = False
             elif isinstance(input, SymbolicInputKit):
                 # If the input is a SymbolicInputKit, it represents more than
                 # one storage unit. The indices and subinputs lists represent
