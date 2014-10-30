@@ -1650,8 +1650,7 @@ def test_local_useless_subtensor():
         #theano.printing.debugprint(f)
         prog = f.maker.fgraph.toposort()
         if res:
-            assert isinstance(prog[0].op, theano.tensor.basic.
-                              SpecifyShape), dims
+            assert isinstance(prog[0].op, theano.tensor.SpecifyShape), dims
             assert prog[1].op == tensor.exp, dims
             assert len(prog) == 2, dims
         else:
@@ -2372,8 +2371,8 @@ class test_local_subtensor_merge(unittest.TestCase):
 class Test_alloc_zero(unittest.TestCase):
     def setUp(self):
         mode = theano.compile.mode.get_default_mode()
-        self.mode = mode.including("local_incsubtensor_of_allocs",
-                                   "local_setsubtensor_of_allocs",
+        self.mode = mode.including("local_incsubtensor_of_zeros",
+                                   "local_setsubtensor_of_constants",
                                    "local_0_dot_x")
 
     def test_setsubtensor_allocs0(self):
@@ -2477,6 +2476,35 @@ class Test_alloc_zero(unittest.TestCase):
                                       _e1[2], _e2[1])
 
 
+def test_local_IncSubtensor_serialize():
+    d = numpy.random.normal(0, 0.01, size=(100, 100))
+    d = d.astype(theano.config.floatX)
+
+    W = theano.shared(d, name='W')
+    i = T.vector('i', dtype='int64')
+    j = T.vector('j', dtype='int64')
+    t = T.scalar('t')
+    if theano.tensor.subtensor.inplace_increment:
+        y = (W[i] + W[j] + W[1] + W[i, j]).sum()
+    else:
+        y = (W[i] + W[j] + W[1]).sum()
+    cost = T.sqr(t - y)
+    dW = theano.grad(cost, W)
+    mode = theano.compile.mode.get_default_mode().excluding('fusion')
+    mode = mode.including("local_IncSubtensor_serialize")
+    f = theano.function([i, j, t], updates=[(W, W - 0.01 * dW)], mode=mode)
+    topo = f.maker.fgraph.toposort()
+    adds = [n for n in topo if isinstance(n.op, T.Elemwise) and
+            isinstance(n.op.scalar_op, theano.scalar.Add)]
+    for a in adds:
+        assert not any([inp.owner and
+                        isinstance(inp.owner.op,
+                                   (tensor.IncSubtensor,
+                                    tensor.AdvancedIncSubtensor,
+                                    tensor.AdvancedIncSubtensor1))
+                        for inp in a.inputs])
+
+
 def test_local_subtensor_of_dot():
     m1 = theano.tensor.matrix()
     m2 = theano.tensor.matrix()
@@ -2511,6 +2539,171 @@ def test_local_subtensor_of_dot():
 
     f = theano.function([m1, m2, idx], theano.dot(m1, m2)[1:4,:,idx:,idx], mode=mode)
     assert test_equality(f(d1, d2, 1), numpy.dot(d1, d2)[1:4,:,1:,1])
+
+
+class Test_local_alloc_elemwise(unittest.TestCase):
+    dtype = config.floatX
+
+    def setUp(self):
+        self.vec = T.vector('vec', dtype=theano.config.floatX)
+        self.mat = T.matrix('mat', dtype=theano.config.floatX)
+        self.tens = T.tensor3('tens', dtype=theano.config.floatX)
+
+        self.alloc_wo_dep = T.alloc(self.vec, 2, 2)
+        self.alloc_w_dep = T.alloc(self.vec, *self.mat.shape)
+
+    def _verify_alloc_count(self, f, count):
+        assert(
+            sum([isinstance(elem.op, T.Alloc)
+                 for elem in f.maker.fgraph.toposort()
+                 if elem.op is not None]) == count
+        )
+
+    def _verify_assert_count(self, f, count):
+        assert(
+            sum([isinstance(elem.op, T.opt.Assert)
+                 for elem in f.maker.fgraph.toposort()
+                 if elem.op is not None]) == count
+        )
+
+    def test_remove_alloc_wo_dimshuffle(self):
+        # No optimization on alloc
+        func = function(
+            [self.vec, self.mat],
+            self.alloc_wo_dep + self.mat,
+            mode='FAST_COMPILE'
+        )
+        self._verify_alloc_count(func, 1)
+        self._verify_assert_count(func, 0)
+
+        # Optimization on alloc with assert
+        func = function(
+            [self.vec, self.mat],
+            self.alloc_wo_dep + self.mat,
+            mode='FAST_RUN'
+        )
+        self._verify_alloc_count(func, 0)
+        self._verify_assert_count(func, 1)
+
+        # No optimization on alloc without assert
+        func = function(
+            [self.vec, self.mat],
+            self.alloc_w_dep + self.mat,
+            mode='FAST_COMPILE'
+        )
+        self._verify_alloc_count(func, 1)
+        self._verify_assert_count(func, 0)
+
+        # Optimization on alloc without assert
+        func = function(
+            [self.vec, self.mat],
+            self.alloc_w_dep + self. mat,
+            mode='FAST_RUN'
+        )
+        self._verify_alloc_count(func, 0)
+        self._verify_assert_count(func, 0)
+
+    def test_remove_alloc_w_dimshuffle(self):
+        # No optimization on dimshuffle with assert
+        func = function(
+            [self.vec, self.tens],
+            T.alloc(self.vec, 2, 2).dimshuffle(0, 1, 'x') + self.tens,
+            mode='FAST_COMPILE'
+        )
+        self._verify_alloc_count(func, 1)
+        self._verify_assert_count(func, 0)
+
+        # Optimization on dimshuffle with assert
+        func = function(
+            [self.vec, self.tens],
+            T.alloc(self.vec, 2, 2).dimshuffle(0, 1, 'x') + self.tens,
+            mode='FAST_RUN'
+        )
+        self._verify_alloc_count(func, 0)
+        self._verify_assert_count(func, 1)
+
+        # No optimization on dimshuffle without assert
+        func = function(
+            [self.vec, self.tens],
+            T.alloc(
+                self.vec,
+                self.tens.shape[0],
+                self.tens.shape[1]
+            ).dimshuffle(0, 1, 'x') + self.tens,
+            mode='FAST_COMPILE'
+        )
+        self._verify_alloc_count(func, 1)
+        self._verify_assert_count(func, 0)
+
+        # Optimization on dimshuffle without assert
+        func = function(
+            [self.vec, self.tens],
+            T.alloc(
+                self.vec,
+                self.tens.shape[0],
+                self.tens.shape[1]
+            ).dimshuffle(0, 1, 'x') + self.tens,
+            mode='FAST_RUN'
+        )
+        self._verify_alloc_count(func, 0)
+        self._verify_assert_count(func, 0)
+
+    def test_multi_input_single_alloc(self):
+        tv = T.alloc(self.vec, 5, 5)
+        tm = T.alloc(self.mat, 5, 5, 5)
+        func = function(
+            [self.vec, self.mat],
+            tv + tm,
+            mode='FAST_COMPILE'
+        )
+
+        self._verify_alloc_count(func, 2)
+        self._verify_assert_count(func, 0)
+
+        func = function(
+            [self.vec, self.mat],
+            tv + tm,
+            mode='FAST_RUN'
+        )
+        self._verify_alloc_count(func, 1)
+        self._verify_assert_count(func, 0)
+
+        s = T.iscalar('s')
+        tv = T.alloc(self.vec, s, s)
+        tm = T.alloc(self.mat, 5, 5, 5)
+        func = function(
+            [self.vec, self.mat, s],
+            tv + tm,
+            mode='FAST_COMPILE'
+        )
+
+        self._verify_alloc_count(func, 2)
+        self._verify_assert_count(func, 0)
+
+        func = function(
+            [self.vec, self.mat, s],
+            tv + tm,
+            mode='FAST_RUN'
+        )
+        self._verify_alloc_count(func, 1)
+        self._verify_assert_count(func, 1)
+
+    def test_error(self):
+        t3fft = theano.tensor.tensor(dtype=self.dtype,
+                                     broadcastable=(False, False, True))
+        row = theano.tensor.row(dtype=self.dtype)
+        o = T.alloc(row, 5, 5).dimshuffle(0, 1, 'x') + t3fft
+        func = function(
+            [t3fft, row],
+            o,
+            mode='FAST_RUN'
+        )
+        self._verify_alloc_count(func, 0)
+        self._verify_assert_count(func, 1)
+        d = numpy.random.rand(5, 5, 1).astype(self.dtype)
+        r = numpy.random.rand(1, 5).astype(self.dtype)
+        func(d, r)
+
 
 def test_local_subtensor_of_alloc():
 

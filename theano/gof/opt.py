@@ -22,8 +22,6 @@ import theano
 from theano import config
 from theano.gof.python25 import any, all, deque
 
-#if sys.version_info[:2] >= (2,5):
-#  from collections import defaultdict
 
 _logger = logging.getLogger('theano.gof.opt')
 
@@ -154,7 +152,7 @@ def inplace_optimizer(f):
 
 
 class SeqOptimizer(Optimizer, list):
-    #inherit from Optimizer first to get Optimizer.__hash__
+    # inherit from Optimizer first to get Optimizer.__hash__
     """WRITEME
     Takes a list of L{Optimizer} instances and applies them
     sequentially.
@@ -874,6 +872,9 @@ class LocalOptGroup(LocalOptimizer):
     """WRITEME"""
 
     def __init__(self, *optimizers):
+        if len(optimizers) == 1 and isinstance(optimizers[0], list):
+            # This happen when created by LocalGroupDB.
+            optimizers = tuple(optimizers[0])
         self.opts = optimizers
         self.reentrant = any(getattr(opt, 'reentrant', True)
                              for opt in optimizers)
@@ -882,8 +883,16 @@ class LocalOptGroup(LocalOptimizer):
 
     def __str__(self):
         return getattr(self, '__name__',
-                       ('<theano.gof.opt.LocalOptGroup instance>' +
-                        str([str(o) for o in self.opts])))
+                       ('LocalOptGroup(%s)' %
+                        ','.join([str(o) for o in self.opts])))
+
+    def tracks(self):
+        t = []
+        for l in self.opts:
+            tt = l.tracks()
+            if tt:
+                t.extend(tt)
+        return t
 
     def transform(self, node):
         for opt in self.opts:
@@ -1241,6 +1250,30 @@ class PatternSub(LocalOptimizer):
 
 # Use the following classes to apply LocalOptimizers
 
+class Updater:
+    def __init__(self, importer, pruner, chin):
+        self.importer = importer
+        self.pruner = pruner
+        self.chin = chin
+
+    def on_import(self, fgraph, node, reason):
+        if self.importer:
+            self.importer(node)
+
+    def on_prune(self, fgraph, node, reason):
+        if self.pruner:
+            self.pruner(node)
+
+    def on_change_input(self, fgraph, node, i, r, new_r, reason):
+        if self.chin:
+            self.chin(node, i, r, new_r, reason)
+
+    def on_detach(self, fgraph):
+        # To allow pickling this object
+        self.importer = None
+        self.pruner = None
+        self.chin = None
+
 
 class NavigatorOptimizer(Optimizer):
     """Abstract class
@@ -1329,18 +1362,7 @@ class NavigatorOptimizer(Optimizer):
         if importer is None and pruner is None:
             return None
 
-        class Updater:
-            if importer is not None:
-                def on_import(self, fgraph, node, reason):
-                    importer(node)
-            if pruner is not None:
-                def on_prune(self, fgraph, node, reason):
-                    pruner(node)
-            if chin is not None:
-                def on_change_input(self, fgraph, node, i, r, new_r, reason):
-                    chin(node, i, r, new_r, reason)
-
-        u = Updater()
+        u = Updater(importer, pruner, chin)
         fgraph.attach_feature(u)
         return u
 
