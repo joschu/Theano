@@ -1522,7 +1522,7 @@ def gcc_llvm():
     """
     if gcc_llvm.is_llvm is None:
         try:
-            p_out = output_subprocess_Popen(['g++', '--version'])
+            p_out = output_subprocess_Popen([theano.config.cxx, '--version'])
             output = p_out[0] + p_out[1]
         except OSError:
             # Typically means g++ cannot be found.
@@ -1544,7 +1544,7 @@ class GCC_compiler(object):
 
     @staticmethod
     def version_str():
-        return "g++ " + gcc_version_str
+        return theano.config.cxx + " " + gcc_version_str
 
     @staticmethod
     def compile_args():
@@ -1571,6 +1571,17 @@ class GCC_compiler(object):
                     detect_march = False
                     GCC_compiler.march_flags = []
                     break
+
+        if not "g++" in theano.config.cxx:
+            _logger.warn(
+                "OPTIMIZATION WARNING: your Theano flag `cxx` seems not to be"
+                " the g++ compiler. So we disable the compiler optimization"
+                " specific to g++ that tell to compile for a specific CPU."
+                " At worst, this could cause slow down.\n"
+                "         You can add yourself those parameters to the compiler"
+                " via the Theano flag `gcc.cxxflags`."
+            )
+            detect_march = False
 
         if detect_march:
             GCC_compiler.march_flags = []
@@ -1611,7 +1622,7 @@ class GCC_compiler(object):
 
             # The '-' at the end is needed. Otherwise, g++ do not output
             # enough information.
-            native_lines = get_lines("g++ -march=native -E -v -")
+            native_lines = get_lines("%s -march=native -E -v -" % theano.config.cxx)
             if native_lines is None:
                 _logger.info("Call to 'g++ -march=native' failed,"
                              "not setting -march flag")
@@ -1625,7 +1636,7 @@ class GCC_compiler(object):
                 if len(native_lines) == 0:
                     # That means we did not select the right lines, so
                     # we have to report all the lines instead
-                    reported_lines = get_lines("g++ -march=native -E -v -",
+                    reported_lines = get_lines("%s -march=native -E -v -" % theano.config.cxx,
                                                parse=False)
                 else:
                     reported_lines = native_lines
@@ -1638,7 +1649,7 @@ class GCC_compiler(object):
                     " problem:\n %s",
                     reported_lines)
             else:
-                default_lines = get_lines("g++ -E -v -")
+                default_lines = get_lines("%s -E -v -" % theano.config.cxx)
                 _logger.info("g++ default lines: %s", default_lines)
                 if len(default_lines) < 1:
                     _logger.warn(
@@ -1649,7 +1660,7 @@ class GCC_compiler(object):
                         " functions. Please submit the following lines to"
                         " Theano's mailing list so that we can fix this"
                         " problem:\n %s",
-                        get_lines("g++ -E -v -", parse=False))
+                        get_lines("%s -E -v -" % theano.config.cxx, parse=False))
                 else:
                     # Some options are actually given as "-option value",
                     # we want to treat them as only one token when comparing
@@ -1788,7 +1799,8 @@ class GCC_compiler(object):
         return cxxflags
 
     @staticmethod
-    def try_compile_tmp(src_code, tmp_prefix='', flags=(), try_run=False):
+    def try_compile_tmp(src_code, tmp_prefix='', flags=(),
+                        try_run=False, output=False):
         """Try to compile (and run) a test program.
 
         This is useful in various occasions, to check if libraries
@@ -1799,6 +1811,7 @@ class GCC_compiler(object):
 
         If try_run is False, returns the compilation status.
         If try_run is True, returns a (compile_status, run_status) pair.
+        If output is there, we append the stdout and stderr to the output.
         """
         if not theano.config.cxx:
             return False
@@ -1818,14 +1831,14 @@ class GCC_compiler(object):
                 os.write(fd, src_code)
                 os.close(fd)
                 fd = None
-                p_ret = call_subprocess_Popen(
-                    ['g++', path, '-o', exe_path] + flags)
+                out, err, p_ret = output_subprocess_Popen(
+                    [theano.config.cxx, path, '-o', exe_path] + flags)
                 if p_ret != 0:
                     compilation_ok = False
                 elif try_run:
                     # Try to execute the program
                     try:
-                        p_ret = call_subprocess_Popen([exe_path])
+                        out, err, p_ret = output_subprocess_Popen([exe_path])
                         run_ok = (p_ret == 0)
                     finally:
                         os.remove(exe_path)
@@ -1839,13 +1852,18 @@ class GCC_compiler(object):
         except OSError, e:
             compilation_ok = False
 
-        if not try_run:
+        if not try_run and not output:
             return compilation_ok
-        else:
+        elif not try_run and output:
+            return (compilation_ok, out, err)
+        elif not output:
             return (compilation_ok, run_ok)
+        else:
+            return (compilation_ok, run_ok, out, err)
 
     @staticmethod
-    def try_flags(flag_list):
+    def try_flags(flag_list, preambule="", body="",
+                  try_run=False, output=False):
         '''
         Try to compile a dummy file with these flags.
 
@@ -1856,13 +1874,16 @@ class GCC_compiler(object):
             return False
 
         code = b("""
+        %(preambule)s
         int main(int argc, char** argv)
         {
+            %(body)s
             return 0;
         }
-        """)
+        """ % locals())
         return GCC_compiler.try_compile_tmp(code, tmp_prefix='try_flags_',
-                flags=flag_list, try_run=False)
+                                            flags=flag_list, try_run=try_run,
+                                            output=output)
 
     @staticmethod
     def compile_str(module_name, src_code, location=None,
@@ -1937,7 +1958,7 @@ class GCC_compiler(object):
                                     (module_name, get_lib_extension()))
 
         _logger.debug('Generating shared lib %s', lib_filename)
-        cmd = ['g++', get_gcc_shared_library_arg(), '-g']
+        cmd = [theano.config.cxx, get_gcc_shared_library_arg(), '-g']
 
         if config.cmodule.remove_gxx_opt:
             cmd.extend(p for p in preargs if not p.startswith('-O'))

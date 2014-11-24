@@ -7,9 +7,11 @@ from theano.tests import unittest_tools as utt
 
 from theano.tensor.extra_ops import (CumsumOp, cumsum, CumprodOp, cumprod,
                                      BinCountOp, bincount, DiffOp, diff,
-                                     squeeze, RepeatOp, repeat, Bartlett, bartlett,
-                                     FillDiagonal, fill_diagonal, FillDiagonalOffset,
-                                     fill_diagonal_offset)
+                                     squeeze, RepeatOp, repeat,
+                                     Bartlett, bartlett,
+                                     FillDiagonal, fill_diagonal,
+                                     FillDiagonalOffset, fill_diagonal_offset,
+                                     to_one_hot)
 from theano import tensor as T
 from theano import config, tensor, function
 
@@ -60,7 +62,7 @@ class TestCumsumOp(utt.InferShapeTester):
         utt.verify_grad(self.op, [a])  # Test axis=None
 
         for axis in range(len(a.shape)):
-            utt.verify_grad(self.op_class(axis=axis), [a])
+            utt.verify_grad(self.op_class(axis=axis), [a], eps=4e-4)
 
 
 class TestCumprodOp(utt.InferShapeTester):
@@ -491,10 +493,10 @@ class TestFillDiagonalOffset(utt.InferShapeTester):
                 # We can't use numpy.fill_diagonal as it is bugged.
                 assert numpy.allclose(numpy.diag(out, test_offset), val)
                 if test_offset >= 0:
-                   assert (out == val).sum() == min( min(a.shape), 
+                   assert (out == val).sum() == min( min(a.shape),
                                             a.shape[1]-test_offset )
                 else:
-                    assert (out == val).sum() == min( min(a.shape), 
+                    assert (out == val).sum() == min( min(a.shape),
                                             a.shape[0]+test_offset )
 
     def test_gradient(self):
@@ -503,13 +505,13 @@ class TestFillDiagonalOffset(utt.InferShapeTester):
             def fill_diagonal_with_fix_offset( a, val):
                 return fill_diagonal_offset( a, val, test_offset)
 
-            utt.verify_grad(fill_diagonal_with_fix_offset, 
+            utt.verify_grad(fill_diagonal_with_fix_offset,
                         [numpy.random.rand(5, 8), numpy.random.rand()],
                             n_tests=1, rng=TestFillDiagonalOffset.rng)
-            utt.verify_grad(fill_diagonal_with_fix_offset, 
+            utt.verify_grad(fill_diagonal_with_fix_offset,
                         [numpy.random.rand(8, 5), numpy.random.rand()],
                             n_tests=1, rng=TestFillDiagonalOffset.rng)
-            utt.verify_grad(fill_diagonal_with_fix_offset, 
+            utt.verify_grad(fill_diagonal_with_fix_offset,
                         [numpy.random.rand(5, 5), numpy.random.rand()],
                             n_tests=1, rng=TestFillDiagonalOffset.rng)
 
@@ -529,3 +531,30 @@ class TestFillDiagonalOffset(utt.InferShapeTester):
                                      test_offset],
                                      self.op_class )
 
+
+def test_to_one_hot():
+    v = theano.tensor.ivector()
+    o = to_one_hot(v, 10)
+    f = theano.function([v], o)
+    out = f([1, 2, 3, 5, 6])
+    assert out.dtype == theano.config.floatX
+    assert numpy.allclose(
+        out,
+        [[0., 1., 0., 0., 0., 0., 0., 0., 0., 0.],
+         [0., 0., 1., 0., 0., 0., 0., 0., 0., 0.],
+         [0., 0., 0., 1., 0., 0., 0., 0., 0., 0.],
+         [0., 0., 0., 0., 0., 1., 0., 0., 0., 0.],
+         [0., 0., 0., 0., 0., 0., 1., 0., 0., 0.]])
+
+    v = theano.tensor.ivector()
+    o = to_one_hot(v, 10, dtype="int32")
+    f = theano.function([v], o)
+    out = f([1, 2, 3, 5, 6])
+    assert out.dtype == "int32"
+    assert numpy.allclose(
+        out,
+        [[0., 1., 0., 0., 0., 0., 0., 0., 0., 0.],
+         [0., 0., 1., 0., 0., 0., 0., 0., 0., 0.],
+         [0., 0., 0., 1., 0., 0., 0., 0., 0., 0.],
+         [0., 0., 0., 0., 0., 1., 0., 0., 0., 0.],
+         [0., 0., 0., 0., 0., 0., 1., 0., 0., 0.]])
