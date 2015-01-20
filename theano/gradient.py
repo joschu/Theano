@@ -272,6 +272,7 @@ def Rop(f, wrt, eval_points):
                     # Rop should eventually be upgraded to handle integers
                     # correctly, the same as grad
                     y = theano.tensor.cast(y, x.type.dtype)
+                    y = theano.tensor.patternbroadcast(y, x.type.broadcastable)
                     y = x.type.filter_variable(y)
                 assert x.type == y.type
                 same_type_eval_points.append(y)

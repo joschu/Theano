@@ -960,6 +960,18 @@ class ConvOp(OpenMPOp):
         dw = patternbroadcast(dw, kerns.broadcastable)
         return [din, dw]
 
+    def R_op(self, inputs, eval_points):
+        rval = None
+        if eval_points[0] is not None:
+            rval = self.make_node(eval_points[0], inputs[1]).outputs[0]
+        if eval_points[1] is not None:
+            if rval is None:
+                rval = self.make_node(inputs[0], eval_points[1]).outputs[0]
+            else:
+                rval += self.make_node(inputs[0], eval_points[1]).outputs[0]
+        return [rval]
+
+
     def c_headers(self):
         return ['<numpy/noprefix.h>', '<iostream>', '<sstream>']
 
